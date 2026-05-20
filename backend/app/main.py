@@ -26,7 +26,7 @@ app.include_router(reviews.router)
 app.include_router(github.router)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok", "mock_mode": settings.AI_MOCK}
 
