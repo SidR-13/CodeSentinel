@@ -1,10 +1,9 @@
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.config import get_settings
 from app.core.auth import get_current_user
 from app.core.github_client import GitHubClient, parse_pr_url
+from app.core.review_pipeline import ReviewPipeline
 from app.database import get_db
 from app.models.review import Review
 from app.models.review_issue import ReviewComment
@@ -29,21 +29,20 @@ settings = get_settings()
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 logger = logging.getLogger(__name__)
 
-QUEUE_KEY = "review_jobs"
-
-
-def _redis_sync():
-    import redis as _redis
-    return _redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-
 
 async def _redis_async():
     return await aioredis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
+async def _run_pipeline(review_id: int, pr_url: str, owner: str, repo: str, pr_number: int, github_token: str | None):
+    pipeline = ReviewPipeline(review_id=review_id, github_token=github_token)
+    await pipeline.run(pr_url=pr_url, owner=owner, repo=repo, pr_number=pr_number)
+
+
 @router.post("", response_model=ReviewSummaryResponse, status_code=status.HTTP_201_CREATED)
 async def submit_review(
     payload: SubmitReviewRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -76,18 +75,17 @@ async def submit_review(
     db.add(review)
     await db.flush()
     await db.refresh(review)
-    await db.commit()  # commit before pushing to Redis so worker can find the row
+    await db.commit()
 
-    job = {
-        "review_id": review.id,
-        "pr_url": payload.pr_url,
-        "owner": owner,
-        "repo": repo,
-        "pr_number": pr_number,
-        "github_token": current_user.github_token,
-    }
-    r = _redis_sync()
-    r.rpush(QUEUE_KEY, json.dumps(job))
+    background_tasks.add_task(
+        _run_pipeline,
+        review_id=review.id,
+        pr_url=payload.pr_url,
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        github_token=current_user.github_token,
+    )
 
     return ReviewSummaryResponse(
         id=review.id,
