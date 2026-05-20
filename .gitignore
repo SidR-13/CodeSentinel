@@ -1,0 +1,18 @@
+# Environment
+.env
+.env.*
+
+# Claude context files
+CLAUDE*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc

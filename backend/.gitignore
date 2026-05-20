@@ -1,0 +1,23 @@
+# Environment
+.env
+.env.*
+
+# Claude context files
+CLAUDE*.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Testing
+.pytest_cache/
+
+# Alembic compiled
+alembic/versions/*.pyc
