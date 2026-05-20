@@ -2,6 +2,16 @@
 
 An autonomous GitHub pull request review agent powered by Claude AI. Submit any public PR URL and receive a structured code review covering security vulnerabilities, bugs, quality issues, and cross-file dependency problems — with a 0–100 quality score and the option to post the review directly as a GitHub comment.
 
+**Live demo:** https://codesentinel-nu.vercel.app
+
+| | |
+|---|---|
+| Frontend | https://codesentinel-nu.vercel.app |
+| Backend API | https://codesentinel-q4ob.onrender.com |
+| API docs | https://codesentinel-q4ob.onrender.com/docs |
+
+Demo credentials: `user1@codesentinel.dev` / `password123`
+
 ---
 
 ## Tech Stack
@@ -11,13 +21,13 @@ An autonomous GitHub pull request review agent powered by Claude AI. Submit any 
 | Backend API | FastAPI | 0.111 |
 | Runtime | Python | 3.11 |
 | AI | Anthropic Claude (claude-haiku-4-5) | via `anthropic` 0.28 |
-| Task Queue | Redis (list + pub/sub) | 7-alpine |
+| Task Queue | FastAPI BackgroundTasks + Redis pub/sub | — |
 | Database | PostgreSQL + SQLAlchemy async | 15-alpine / 2.0 |
 | Migrations | Alembic | 1.13 |
 | Auth | JWT (python-jose) + bcrypt | — |
 | Frontend | React + Vite | 18 / 5 |
 | Styling | Tailwind CSS | 3.4 |
-| Reverse proxy (Docker) | Nginx | alpine |
+| Hosting | Render (backend) + Vercel (frontend) | — |
 
 ---
 
@@ -25,28 +35,16 @@ An autonomous GitHub pull request review agent powered by Claude AI. Submit any 
 
 ```
 ┌─────────────┐     HTTPS      ┌──────────────────────────────────────────┐
-│   Browser   │ ─────────────► │              React / Vite                │
+│   Browser   │ ─────────────► │         React / Vite (Vercel)            │
 │  (React)    │                │  Dashboard · NewReview · ReviewResult     │
 └─────────────┘                └────────────────┬─────────────────────────┘
                                                 │ REST + SSE
                                                 ▼
                                ┌──────────────────────────────────────────┐
-                               │            FastAPI Backend               │
+                               │         FastAPI Backend (Render)         │
                                │  /api/auth   /api/reviews   /api/github  │
-                               └──────┬──────────────┬────────────────────┘
-                                      │              │
-                          push job    │              │  async ORM
-                                      ▼              ▼
-                               ┌────────────┐  ┌──────────────┐
-                               │   Redis    │  │  PostgreSQL  │
-                               │  job queue │  │   reviews    │
-                               │  pub/sub   │  │   issues     │
-                               └─────┬──────┘  └──────────────┘
-                                     │ pop job
-                                     ▼
-                               ┌──────────────────────────────────────────┐
-                               │           Review Worker                  │
-                               │  ReviewPipeline.run()                    │
+                               │                                          │
+                               │  BackgroundTasks → ReviewPipeline.run()  │
                                │  1. Fetch PR metadata (GitHub API)       │
                                │  2. Fetch unified diff                   │
                                │  3. Build file dependency graph          │
@@ -55,7 +53,15 @@ An autonomous GitHub pull request review agent powered by Claude AI. Submit any 
                                │  6. Calculate score (0–100)              │
                                │  7. Persist issues to PostgreSQL         │
                                │  8. Publish progress via Redis pub/sub   │
-                               └──────────────────────────────────────────┘
+                               └──────┬──────────────┬────────────────────┘
+                                      │              │
+                             pub/sub  │              │  async ORM
+                                      ▼              ▼
+                               ┌────────────┐  ┌──────────────┐
+                               │  Upstash   │  │  Supabase    │
+                               │   Redis    │  │  PostgreSQL  │
+                               │  pub/sub   │  │   reviews    │
+                               └────────────┘  └──────────────┘
 ```
 
 ### Review Pipeline
@@ -128,15 +134,7 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-### 6. Start the review worker (separate terminal)
-
-```bash
-cd backend
-source .venv/bin/activate
-python -m app.worker.review_worker
-```
-
-### 7. Configure and start the frontend
+### 6. Configure and start the frontend
 
 ```bash
 cd frontend
