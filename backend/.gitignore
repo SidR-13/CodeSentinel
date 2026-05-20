@@ -19,5 +19,8 @@ venv/
 # Testing
 .pytest_cache/
 
+# Logs
+*.log
+
 # Alembic compiled
 alembic/versions/*.pyc
