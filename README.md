@@ -1,5 +1,7 @@
 # CodeSentinel
 
+![CI](https://github.com/SidR-13/CodeSentinel/actions/workflows/ci.yml/badge.svg)
+
 An autonomous GitHub pull request review agent powered by Claude AI. Submit any public PR URL and receive a structured code review covering security vulnerabilities, bugs, quality issues, and cross-file dependency problems — with a 0–100 quality score and the option to post the review directly as a GitHub comment.
 
 **Live demo:** https://codesentinel-nu.vercel.app
