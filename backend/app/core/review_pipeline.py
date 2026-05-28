@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 import redis
@@ -109,17 +110,31 @@ class ReviewPipeline:
             {"step": step, "message": message, "progress": progress, "status": status}
         )
         self._redis.publish(f"review:{self.review_id}:progress", event)
-        logger.info("Review %d [%d%%] %s: %s", self.review_id, progress, step, message)
+
+    def _log_stage(self, stage: str, duration_ms: float, **extra):
+        logger.info(
+            "pipeline_stage",
+            extra={
+                "review_id": self.review_id,
+                "stage": stage,
+                "duration_ms": round(duration_ms, 1),
+                "model": "mock" if settings.AI_MOCK else settings.CLAUDE_MODEL,
+                **extra,
+            },
+        )
 
     async def run(self, pr_url: str, owner: str, repo: str, pr_number: int):
+        pipeline_start = time.monotonic()
         async with AsyncSessionLocal() as db:
             await self._update_status(db, "processing")
 
         try:
             # Step 1 — fetch PR metadata
             self._publish("fetching_pr", "Fetching PR information from GitHub…", 10)
+            t = time.monotonic()
             pr_info = await self.github.get_pr_info(owner, repo, pr_number)
             pr_title = pr_info.get("title", f"PR #{pr_number}")
+            self._log_stage("fetching_pr", (time.monotonic() - t) * 1000)
 
             # Check Redis cache — same PR URL never reviewed twice
             cache_key = f"review_cache:{pr_url}"
@@ -127,24 +142,32 @@ class ReviewPipeline:
             if cached:
                 self._publish("cache_hit", "Loaded from cache — skipping AI call.", 80)
                 review_data = json.loads(cached)
+                self._log_stage("cache_hit", 0, cache=True)
             else:
                 # Step 2 — fetch diff
                 self._publish("fetching_diff", "Fetching PR diff…", 25)
+                t = time.monotonic()
                 raw_diff = await self.github.get_pr_diff(owner, repo, pr_number)
+                self._log_stage("fetching_diff", (time.monotonic() - t) * 1000)
 
                 # Step 3 — dependency graph
                 self._publish("building_graph", "Building file dependency graph…", 38)
+                t = time.monotonic()
                 dep_graph = build_dependency_graph(raw_diff)
                 dep_summary = format_dependency_graph(dep_graph)
+                self._log_stage("building_graph", (time.monotonic() - t) * 1000)
 
                 # Step 4 — truncate
                 self._publish("truncating", "Preparing context for AI…", 48)
+                t = time.monotonic()
                 diff, file_list, token_count = _truncate_diff(
                     raw_diff, settings.MAX_FILES_PER_REVIEW, _MAX_CHARS
                 )
+                self._log_stage("truncating", (time.monotonic() - t) * 1000, token_count=token_count)
 
                 # Step 5 — AI review
                 self._publish("reviewing", "Analyzing code with Claude AI…", 60)
+                t = time.monotonic()
                 review_data = await self.claude.review_pr(
                     diff=diff,
                     pr_title=pr_title,
@@ -154,26 +177,51 @@ class ReviewPipeline:
                     dependency_graph=dep_summary,
                     token_count=token_count,
                 )
+                self._log_stage("ai_review", (time.monotonic() - t) * 1000)
 
                 # Cache result
                 self._redis.setex(cache_key, settings.REDIS_CACHE_TTL, json.dumps(review_data))
 
             # Step 6 — score
             self._publish("scoring", "Calculating review score…", 78)
+            t = time.monotonic()
             score = calculate_score(review_data)
             total_issues, critical_issues = count_issues(review_data)
+            self._log_stage("scoring", (time.monotonic() - t) * 1000, score=score, total_issues=total_issues)
 
             # Step 7 — save to DB
             self._publish("saving", "Saving results to database…", 90)
+            t = time.monotonic()
             async with AsyncSessionLocal() as db:
                 await self._save_results(
                     db, pr_title, review_data, score, total_issues, critical_issues
                 )
+            self._log_stage("saving", (time.monotonic() - t) * 1000)
 
+            total_ms = (time.monotonic() - pipeline_start) * 1000
+            logger.info(
+                "pipeline_complete",
+                extra={
+                    "review_id": self.review_id,
+                    "total_duration_ms": round(total_ms, 1),
+                    "score": score,
+                    "total_issues": total_issues,
+                    "model": "mock" if settings.AI_MOCK else settings.CLAUDE_MODEL,
+                },
+            )
             self._publish("completed", "Review complete!", 100, status="completed")
 
         except Exception as exc:
-            logger.exception("Review %d failed", self.review_id)
+            total_ms = (time.monotonic() - pipeline_start) * 1000
+            logger.exception(
+                "pipeline_failed",
+                extra={
+                    "review_id": self.review_id,
+                    "total_duration_ms": round(total_ms, 1),
+                    "error_type": type(exc).__name__,
+                    "model": "mock" if settings.AI_MOCK else settings.CLAUDE_MODEL,
+                },
+            )
             async with AsyncSessionLocal() as db:
                 await self._update_status(db, "failed", str(exc))
             self._publish("failed", f"Review failed: {exc}", 0, status="failed")

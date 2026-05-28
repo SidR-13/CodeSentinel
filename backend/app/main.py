@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
-from app.api import auth, reviews, github
+from app.api import auth, reviews, github, metrics
+from app.core.logging_config import configure_logging
+
+configure_logging()
 
 settings = get_settings()
 
@@ -24,6 +27,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(reviews.router)
 app.include_router(github.router)
+app.include_router(metrics.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
